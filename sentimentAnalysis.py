@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from transformers import BertTokenizer, BertForSequenceClassification
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 from datasets import load_dataset
 from tqdm import tqdm
 
@@ -10,7 +10,7 @@ dataset = load_dataset('imdb')
 train_data = dataset['train']
 test_data = dataset['test']
 
-tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
 def tokenize_function(examples):
     return tokenizer(examples['text'], padding='max_length', truncation=True)
@@ -21,8 +21,8 @@ test_data = test_data.map(tokenize_function, batched=True)
 train_data.set_format('torch', columns=['input_ids', 'attention_mask', 'label'])
 test_data.set_format('torch', columns=['input_ids', 'attention_mask', 'label'])
 
-train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_data, batch_size=32, shuffle=False)
+train_loader = DataLoader(train_data, batch_size=8, shuffle=True, pin_memory=True)
+test_loader = DataLoader(test_data, batch_size=8, shuffle=False, pin_memory=True)
 
 batch = next(iter(train_loader))
 print(batch['input_ids'].shape)
@@ -30,13 +30,13 @@ print(batch['label'].shape)
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
+model = DistilBertForSequenceClassification.from_pretrained('distilbert-base-uncased', num_labels=2)
 model = model.to(device)
 
 optimizer = AdamW(model.parameters(), lr=2e-5)
 criterion = torch.nn.CrossEntropyLoss()
 
-def train(model, iterator, optimizer, criterion, device):
+def train(model, iterator, optimizer, criterion, device, acumulation_steps=8):
     model.train()
     epoch_loss = 0
     epoch_acc = 0
@@ -52,7 +52,10 @@ def train(model, iterator, optimizer, criterion, device):
         logits = outputs.logits
 
         loss.backward()
-        optimizer.step()
+
+        if len(iterator) % acumulation_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
 
         epoch_loss += loss.item()
         epoch_acc += (logits.argmax(dim=1) == labels).sum().item() / len(labels)
@@ -82,7 +85,10 @@ def evaluate(model, iterator, criterion, device):
 n_epochs = 3
 
 for epoch in range(n_epochs):
+    print(f"Now training. Epoch number {epoch}")
     train_loss, train_acc = train(model, train_loader, optimizer, criterion, device)
+    
+    print(f"Now validating. Epoch number {epoch}")
     valid_loss, valid_acc = evaluate(model, test_loader, criterion, device)
 
     print(f'Epoch: {epoch+1}')
